@@ -12,7 +12,13 @@
 #
 #   OLTP benchmark with multiple workloads, table sizes, and thread counts
 #   Outputs results to CSV for easy comparison and analysis
+#
+#   License: GPLv2
+#   Copyright (C) 2026 Alex Gaetano Padula
 # 
+#   ---------------------------------
+#   Usage
+#   ---------------------------------
 #   Make sure you have latest sysbench installed
 #   ---------------------------------
 #   https://github.com/akopytov/sysbench
