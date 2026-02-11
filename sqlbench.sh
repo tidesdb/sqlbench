@@ -181,9 +181,9 @@ run_sysbench_test() {
 
     # Prepare -- we pass engine options in CREATE TABLE via --create_table_options
     echo "▶ Preparing $TABLES table(s) with $table_size rows (${engine}${create_opts:+ [$create_opts]})..."
-    local sb_create_opts=""
+    local -a sb_extra_opts=()
     if [ -n "$create_opts" ]; then
-        sb_create_opts="--create_table_options=${create_opts}"
+        sb_extra_opts+=("--create_table_options=${create_opts}")
     fi
     if ! sysbench "$test" \
         --mysql-socket="$SOCKET" \
@@ -193,7 +193,7 @@ run_sysbench_test() {
         --table-size="$table_size" \
         --threads=1 \
         --mysql-storage-engine="$engine" \
-        $sb_create_opts \
+        "${sb_extra_opts[@]}" \
         prepare 2>&1; then
         echo "  ✗ Prepare failed for $engine $test_name"
         return 1
@@ -244,7 +244,7 @@ run_sysbench_test() {
     local lat_max=$(grep "max:" "$output_file" | tail -1 | awk '{print $2}')
     local errors=$(grep "ignored errors:" "$output_file" | awk '{print $3}' || echo "0")
     local reconnects=$(grep "reconnects:" "$output_file" | head -1 | awk '{print $2}' || echo "0")
-    local total_time=$(grep "total time:" "$output_file" | awk '{print $3}' | sed 's/s//g')
+    local total_time=$(grep "time elapsed:" "$output_file" | awk '{print $3}' | sed 's/s//g')
 
     # We calculate reads/writes per second
     local reads_per_sec=$(echo "scale=2; ${reads:-0} / ${total_time:-1}" | bc 2>/dev/null || echo "0")
@@ -351,6 +351,8 @@ stop_server() {
         sleep 1
     fi
     rm -f "$PID_FILE" "$SOCKET" 2>/dev/null
+    # Remove TidesDB lock file so the next start can open the database
+    rm -f "$TIDESDB_DIR/LOCK" 2>/dev/null
 }
 
 # We check if the server is alive; restart if needed.
@@ -358,7 +360,7 @@ check_and_restart_server() {
     [ -z "$DATA_DIR" ] && return 0
     "$MYSQL_BIN" -S "$SOCKET" -u "$DB_USER" -e "SELECT 1" >/dev/null 2>&1 && return 0
     echo "  ⚠ Server is down, restarting..."
-    rm -f "$PID_FILE" "$SOCKET" 2>/dev/null
+    rm -f "$PID_FILE" "$SOCKET" "$TIDESDB_DIR/LOCK" 2>/dev/null
     if ! start_server; then
         return 1
     fi
@@ -379,18 +381,18 @@ if [ -n "$DATA_DIR" ]; then
 
     stop_server
 
-    # We create directories
+    # Wipe everything for a clean start
+    echo "Cleaning data directories for fresh benchmark..."
+    rm -rf "$DATA_DIR" "$TIDESDB_DIR"
     mkdir -p "$DATA_DIR" "$TIDESDB_DIR" "$INNODB_DIR"
 
-    # We initialize data directory if needed
-    if [ ! -d "$DATA_DIR/mysql" ]; then
-        echo "Initializing data directory: $DATA_DIR"
-        "${BUILD_DIR}/scripts/mariadb-install-db" \
-            --no-defaults \
-            --basedir="${BUILD_DIR}" \
-            --datadir="$DATA_DIR" \
-            --user="$(whoami)" 2>&1 | tail -3
-    fi
+    # Initialize data directory
+    echo "Initializing data directory: $DATA_DIR"
+    "${BUILD_DIR}/scripts/mariadb-install-db" \
+        --no-defaults \
+        --basedir="${BUILD_DIR}" \
+        --datadir="$DATA_DIR" \
+        --user="$(whoami)" 2>&1 | tail -3
 
     echo "Starting MariaDB server with custom data directories..."
     echo "  MariaDB data:  $DATA_DIR"
