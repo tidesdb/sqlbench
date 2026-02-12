@@ -67,6 +67,7 @@
 #
 #   InnoDB tuning
 #   ---------------------------------
+#   INNODB_BUFFER_POOL      - InnoDB buffer pool size (default: 256M)
 #   INNODB_FLUSH            - InnoDB flush_log_at_trx_commit value (default: 0 for benchmarking)
 #
 #   Available workloads
@@ -143,6 +144,9 @@ TIDESDB_COMPRESSION="${TIDESDB_COMPRESSION:-LZ4}"
 TIDESDB_FLUSH_THREADS="${TIDESDB_FLUSH_THREADS:-2}"
 TIDESDB_COMPACT_THREADS="${TIDESDB_COMPACT_THREADS:-2}"
 TIDESDB_BLOCK_CACHE="${TIDESDB_BLOCK_CACHE:-268435456}"
+
+# InnoDB tuning defaults
+INNODB_BUFFER_POOL="${INNODB_BUFFER_POOL:-256M}"
 TIDESDB_MAX_SSTABLES="${TIDESDB_MAX_SSTABLES:-256}"
 
 # Default workloads -- OLTP coverage
@@ -402,7 +406,7 @@ build_server_args() {
         --innodb=ON
         --innodb-data-home-dir="$INNODB_DIR"
         --innodb-log-group-home-dir="$INNODB_DIR"
-        --innodb-buffer-pool-size=256M
+        --innodb-buffer-pool-size="$INNODB_BUFFER_POOL"
         --innodb-log-file-size=64M
         --innodb-flush-log-at-trx-commit="${INNODB_FLUSH:-0}"
         --skip-grant-tables
