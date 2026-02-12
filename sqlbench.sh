@@ -132,9 +132,45 @@ DETAIL_CSV="$OUTPUT_DIR/detail_${TIMESTAMP}.csv"
 LATENCY_CSV="$OUTPUT_DIR/latency_${TIMESTAMP}.csv"
 
 # CSV headers
-echo "engine,workload,threads,table_size,tps,qps,reads_per_sec,writes_per_sec,latency_avg_ms,latency_min_ms,latency_p95_ms,latency_max_ms,errors,reconnects,total_time_s,warmup_s" > "$SUMMARY_CSV"
+SIZES_CSV="$OUTPUT_DIR/sizes_${TIMESTAMP}.csv"
+
+echo "engine,workload,threads,table_size,tps,qps,reads_per_sec,writes_per_sec,latency_avg_ms,latency_min_ms,latency_p95_ms,latency_max_ms,errors,reconnects,total_time_s,warmup_s,data_size_after_prepare_mb,data_size_after_run_mb" > "$SUMMARY_CSV"
 echo "engine,workload,threads,table_size,time_s,tps,qps,latency_avg_ms,latency_p95_ms" > "$DETAIL_CSV"
 echo "engine,workload,threads,table_size,percentile,latency_ms" > "$LATENCY_CSV"
+echo "engine,workload,threads,table_size,phase,size_bytes,size_mb" > "$SIZES_CSV"
+
+# Measure engine-specific data directory size.
+# For InnoDB: .ibd files in DATA_DIR/test/ + system tablespace + redo logs
+# For TidesDB: everything under TIDESDB_DIR/
+measure_data_size() {
+    local engine=$1
+    local size_bytes=0
+
+    if [ -z "$DATA_DIR" ]; then
+        echo "0"
+        return
+    fi
+
+    if [ "$engine" = "TidesDB" ]; then
+        # TidesDB stores all data under TIDESDB_DIR
+        if [ -d "$TIDESDB_DIR" ]; then
+            size_bytes=$(du -sb "$TIDESDB_DIR" 2>/dev/null | awk '{print $1}')
+        fi
+    else
+        # InnoDB: .ibd files in the database dir + system tablespace + redo logs
+        local ibd_size=0
+        if [ -d "$DATA_DIR/test" ]; then
+            ibd_size=$(find "$DATA_DIR/test" -name '*.ibd' -exec du -sb {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
+        fi
+        local sys_size=0
+        if [ -d "$INNODB_DIR" ]; then
+            sys_size=$(find "$INNODB_DIR" \( -name 'ibdata*' -o -name 'ib_logfile*' -o -name 'ib_redo*' \) -exec du -sb {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
+        fi
+        size_bytes=$(( ${ibd_size:-0} + ${sys_size:-0} ))
+    fi
+
+    echo "${size_bytes:-0}"
+}
 
 run_sysbench_test() {
     local engine=$1
@@ -157,6 +193,24 @@ run_sysbench_test() {
         --mysql-db="$DB" \
         --tables="$TABLES" \
         cleanup > /dev/null 2>&1 || true
+
+    # For TidesDB: wipe the data directory between workloads so that
+    # size measurements are per-workload, not cumulative.  Requires a
+    # server restart since TidesDB holds the DB open.
+    if [ "$engine" = "TidesDB" ] && [ -n "$DATA_DIR" ] && [ -d "$TIDESDB_DIR" ]; then
+        local tdb_size_before_wipe
+        tdb_size_before_wipe=$(du -sb "$TIDESDB_DIR" 2>/dev/null | awk '{print $1}')
+        if [ "${tdb_size_before_wipe:-0}" -gt 1048576 ]; then
+            echo "  [CLEANUP] Wiping TidesDB data dir ($(echo "scale=1; ${tdb_size_before_wipe}/1048576" | bc) MB stale data)..."
+            stop_server
+            rm -rf "$TIDESDB_DIR"
+            mkdir -p "$TIDESDB_DIR"
+            if ! start_server; then
+                echo "  [ERROR] Failed to restart server after TidesDB wipe"
+                return 1
+            fi
+        fi
+    fi
 
     # Build per-engine CREATE TABLE options.
     # These must be passed via --create_table_options so they are part of the
@@ -195,9 +249,14 @@ run_sysbench_test() {
         --mysql-storage-engine="$engine" \
         "${sb_extra_opts[@]}" \
         prepare 2>&1; then
-        echo "  ✗ Prepare failed for $engine $test_name"
+        echo "  [ERROR] Prepare failed for $engine $test_name"
         return 1
     fi
+
+    # Measure data directory size after prepare
+    local size_after_prepare=$(measure_data_size "$engine")
+    local size_after_prepare_mb=$(echo "scale=2; ${size_after_prepare} / 1048576" | bc 2>/dev/null || echo "0")
+    echo "  [SIZE] Data size after prepare: ${size_after_prepare_mb} MB"
 
     # Warmup (if configured)
     if [ "$WARMUP" -gt 0 ]; then
@@ -250,8 +309,17 @@ run_sysbench_test() {
     local reads_per_sec=$(echo "scale=2; ${reads:-0} / ${total_time:-1}" | bc 2>/dev/null || echo "0")
     local writes_per_sec=$(echo "scale=2; ${writes:-0} / ${total_time:-1}" | bc 2>/dev/null || echo "0")
 
+    # Measure data directory size after run (before cleanup)
+    local size_after_run=$(measure_data_size "$engine")
+    local size_after_run_mb=$(echo "scale=2; ${size_after_run} / 1048576" | bc 2>/dev/null || echo "0")
+    echo "  [SIZE] Data size after run: ${size_after_run_mb} MB"
+
     # We write to summary CSV
-    echo "$engine,$test_name,$threads,$table_size,$tps,$qps,$reads_per_sec,$writes_per_sec,$lat_avg,$lat_min,$lat_p95,$lat_max,$errors,$reconnects,$total_time,$WARMUP" >> "$SUMMARY_CSV"
+    echo "$engine,$test_name,$threads,$table_size,$tps,$qps,$reads_per_sec,$writes_per_sec,$lat_avg,$lat_min,$lat_p95,$lat_max,$errors,$reconnects,$total_time,$WARMUP,$size_after_prepare_mb,$size_after_run_mb" >> "$SUMMARY_CSV"
+
+    # Write to sizes CSV
+    echo "$engine,$test_name,$threads,$table_size,after_prepare,$size_after_prepare,$size_after_prepare_mb" >> "$SIZES_CSV"
+    echo "$engine,$test_name,$threads,$table_size,after_run,$size_after_run,$size_after_run_mb" >> "$SIZES_CSV"
 
     # We parse the interval reports for detail CSV
     # Format - [ 10s ] thds: N tps: X qps: Y ... lat (ms,95%): Z
@@ -274,7 +342,7 @@ run_sysbench_test() {
     fi
 
     echo ""
-    echo "✓ $engine $test_name: TPS=$tps, QPS=$qps, Latency avg=${lat_avg}ms p95=${lat_p95}ms max=${lat_max}ms"
+    echo "[OK] $engine $test_name: TPS=$tps, QPS=$qps, Latency avg=${lat_avg}ms p95=${lat_p95}ms max=${lat_max}ms | Data: ${size_after_prepare_mb}->${size_after_run_mb} MB"
 
     # We cleanup tables
     sysbench "$test" \
@@ -359,7 +427,7 @@ stop_server() {
 check_and_restart_server() {
     [ -z "$DATA_DIR" ] && return 0
     "$MYSQL_BIN" -S "$SOCKET" -u "$DB_USER" -e "SELECT 1" >/dev/null 2>&1 && return 0
-    echo "  ⚠ Server is down, restarting..."
+    echo "  [WARN] Server is down, restarting..."
     rm -f "$PID_FILE" "$SOCKET" "$TIDESDB_DIR/LOCK" 2>/dev/null
     if ! start_server; then
         return 1
@@ -458,7 +526,7 @@ for table_size in $TABLE_SIZES; do
 
                 # We need to ensure server is alive before each test
                 if ! check_and_restart_server; then
-                    echo "  ✗ Server could not be restarted, skipping remaining tests"
+                    echo "  [ERROR] Server could not be restarted, skipping remaining tests"
                     break 4
                 fi
 
@@ -485,6 +553,7 @@ echo "Results saved to:"
 echo "  Summary:     $SUMMARY_CSV"
 echo "  Detail:      $DETAIL_CSV"
 echo "  Latency:     $LATENCY_CSV"
+echo "  Sizes:       $SIZES_CSV"
 echo "  Raw output:  $OUTPUT_DIR/*.txt"
 echo ""
 echo "To analyze results:"
