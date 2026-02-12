@@ -411,6 +411,7 @@ build_server_args() {
         --innodb-flush-log-at-trx-commit="${INNODB_FLUSH:-0}"
         --skip-grant-tables
         --skip-networking
+        --user="$(whoami)"
     )
 }
 
