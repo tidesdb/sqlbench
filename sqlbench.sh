@@ -10,7 +10,8 @@
 #   ::::::::::::8 ::::::::::::::::::::::::::::::::::::
 #   ::::::::::::..::::::::::::::::::::::::::::::::::::
 #
-#   OLTP benchmark with multiple workloads, table sizes, and thread counts
+#   OLTP benchmark with multiple workloads, table sizes, thread counts,
+#   and iterations per configuration.
 #   Outputs results to CSV for easy comparison and analysis
 #
 #   License: GPLv2
@@ -33,6 +34,7 @@
 #   THREAD_COUNTS="1 4 8 16" \
 #   TIME=300 \
 #   WARMUP=30 \
+#   ITERATIONS=3 \
 #   ./sqlbench.sh
 #
 #   Environment variables
@@ -46,6 +48,7 @@
 #   TIME                    - Benchmark duration in seconds (default: 60)
 #   WARMUP                  - Warmup duration in seconds before measurement (default: 10)
 #   ENGINES                 - Space-separated list of engines to test (default: "InnoDB TidesDB")
+#   ITERATIONS              - Number of iterations per test configuration (default: 1)
 #   WORKLOADS               - Space-separated list of workloads (default: all OLTP workloads)
 #
 #   TidesDB per-table options (applied via CREATE TABLE)
@@ -78,6 +81,27 @@
 #   oltp_delete             - Delete operations
 #   select_random_ranges    - Range scans (tests LSM merge overhead)
 #
+#   Execution order
+#   ---------------------------------
+#   for each table_size
+#     for each thread_count
+#       for each engine
+#         for each workload
+#           for each iteration (1..ITERATIONS)
+#             cleanup leftover tables
+#             wipe TidesDB data dir (if stale data present)
+#             prepare (create tables, insert rows)
+#             measure data size after prepare
+#             warmup
+#             run benchmark
+#             measure data size after run
+#             record results to CSV
+#             cleanup tables
+#
+#   Each iteration is a full prepare/warmup/run/cleanup cycle from a clean
+#   state, so results across iterations are independently comparable.
+#   Use ITERATIONS>1 to compute averages and standard deviations.
+#
 #   Example with custom I/O directories on fast NVMe
 #   ---------------------------------
 #   INNODB_DATA_DIR=/mnt/nvme/innodb TIDESDB_DATA_DIR=/mnt/nvme/tidesdb ./sqlbench.sh
@@ -108,6 +132,7 @@ TABLES="${TABLES:-1}"
 THREAD_COUNTS="${THREAD_COUNTS:-1}"
 TIME="${TIME:-60}"
 WARMUP="${WARMUP:-10}"
+ITERATIONS="${ITERATIONS:-1}"
 REPORT_INTERVAL="${REPORT_INTERVAL:-10}"
 OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/results}"
 
@@ -120,7 +145,7 @@ TIDESDB_COMPACT_THREADS="${TIDESDB_COMPACT_THREADS:-2}"
 TIDESDB_BLOCK_CACHE="${TIDESDB_BLOCK_CACHE:-268435456}"
 TIDESDB_MAX_SSTABLES="${TIDESDB_MAX_SSTABLES:-256}"
 
-# Default workloads - OLTP coverage
+# Default workloads -- OLTP coverage
 DEFAULT_WORKLOADS="oltp_point_select oltp_read_only oltp_write_only oltp_read_write oltp_insert oltp_update_index oltp_update_non_index oltp_delete"
 WORKLOADS="${WORKLOADS:-$DEFAULT_WORKLOADS}"
 
@@ -134,14 +159,14 @@ LATENCY_CSV="$OUTPUT_DIR/latency_${TIMESTAMP}.csv"
 # CSV headers
 SIZES_CSV="$OUTPUT_DIR/sizes_${TIMESTAMP}.csv"
 
-echo "engine,workload,threads,table_size,tps,qps,reads_per_sec,writes_per_sec,latency_avg_ms,latency_min_ms,latency_p95_ms,latency_max_ms,errors,reconnects,total_time_s,warmup_s,data_size_after_prepare_mb,data_size_after_run_mb" > "$SUMMARY_CSV"
-echo "engine,workload,threads,table_size,time_s,tps,qps,latency_avg_ms,latency_p95_ms" > "$DETAIL_CSV"
-echo "engine,workload,threads,table_size,percentile,latency_ms" > "$LATENCY_CSV"
-echo "engine,workload,threads,table_size,phase,size_bytes,size_mb" > "$SIZES_CSV"
+echo "engine,workload,threads,table_size,iteration,tps,qps,reads_per_sec,writes_per_sec,latency_avg_ms,latency_min_ms,latency_p95_ms,latency_max_ms,errors,reconnects,total_time_s,warmup_s,data_size_after_prepare_mb,data_size_after_run_mb" > "$SUMMARY_CSV"
+echo "engine,workload,threads,table_size,iteration,time_s,tps,qps,latency_avg_ms,latency_p95_ms" > "$DETAIL_CSV"
+echo "engine,workload,threads,table_size,iteration,percentile,latency_ms" > "$LATENCY_CSV"
+echo "engine,workload,threads,table_size,iteration,phase,size_bytes,size_mb" > "$SIZES_CSV"
 
 # Measure engine-specific data directory size.
-# For InnoDB: .ibd files in DATA_DIR/test/ + system tablespace + redo logs
-# For TidesDB: everything under TIDESDB_DIR/
+# For InnoDB    -- .ibd files in DATA_DIR/test/ + system tablespace + redo logs
+# For TidesDB   -- everything under TIDESDB_DIR/
 measure_data_size() {
     local engine=$1
     local size_bytes=0
@@ -157,7 +182,7 @@ measure_data_size() {
             size_bytes=$(du -sb "$TIDESDB_DIR" 2>/dev/null | awk '{print $1}')
         fi
     else
-        # InnoDB: .ibd files in the database dir + system tablespace + redo logs
+        # InnoDB -- .ibd files in the database dir + system tablespace + redo logs
         local ibd_size=0
         if [ -d "$DATA_DIR/test" ]; then
             ibd_size=$(find "$DATA_DIR/test" -name '*.ibd' -exec du -sb {} + 2>/dev/null | awk '{s+=$1} END {print s+0}')
@@ -177,13 +202,14 @@ run_sysbench_test() {
     local test=$2
     local threads=$3
     local table_size=$4
+    local iteration=$5
 
     # We extract just the test name for display and filenames
     local test_name=$(basename "$test" .lua)
 
     echo ""
     echo "═══════════════════════════════════════════════════════════════════"
-    echo "  $engine - $test_name (threads=$threads, table_size=$table_size)"
+    echo "  $engine - $test_name (threads=$threads, table_size=$table_size, iter=$iteration/$ITERATIONS)"
     echo "═══════════════════════════════════════════════════════════════════"
 
     # We cleanup any leftover tables from a previous run
@@ -194,8 +220,8 @@ run_sysbench_test() {
         --tables="$TABLES" \
         cleanup > /dev/null 2>&1 || true
 
-    # For TidesDB: wipe the data directory between workloads so that
-    # size measurements are per-workload, not cumulative.  Requires a
+    # For TidesDB -- We wipe the data directory between iterations so that
+    # size measurements are per-run, not cumulative.  Requires a
     # server restart since TidesDB holds the DB open.
     if [ "$engine" = "TidesDB" ] && [ -n "$DATA_DIR" ] && [ -d "$TIDESDB_DIR" ]; then
         local tdb_size_before_wipe
@@ -275,7 +301,7 @@ run_sysbench_test() {
     fi
 
     echo "▶ Running benchmark for ${TIME}s with $threads threads..."
-    local output_file="$OUTPUT_DIR/${engine}_${test_name}_t${threads}_s${table_size}_${TIMESTAMP}.txt"
+    local output_file="$OUTPUT_DIR/${engine}_${test_name}_t${threads}_s${table_size}_i${iteration}_${TIMESTAMP}.txt"
 
     sysbench "$test" \
         --mysql-socket="$SOCKET" \
@@ -315,21 +341,21 @@ run_sysbench_test() {
     echo "  [SIZE] Data size after run: ${size_after_run_mb} MB"
 
     # We write to summary CSV
-    echo "$engine,$test_name,$threads,$table_size,$tps,$qps,$reads_per_sec,$writes_per_sec,$lat_avg,$lat_min,$lat_p95,$lat_max,$errors,$reconnects,$total_time,$WARMUP,$size_after_prepare_mb,$size_after_run_mb" >> "$SUMMARY_CSV"
+    echo "$engine,$test_name,$threads,$table_size,$iteration,$tps,$qps,$reads_per_sec,$writes_per_sec,$lat_avg,$lat_min,$lat_p95,$lat_max,$errors,$reconnects,$total_time,$WARMUP,$size_after_prepare_mb,$size_after_run_mb" >> "$SUMMARY_CSV"
 
     # Write to sizes CSV
-    echo "$engine,$test_name,$threads,$table_size,after_prepare,$size_after_prepare,$size_after_prepare_mb" >> "$SIZES_CSV"
-    echo "$engine,$test_name,$threads,$table_size,after_run,$size_after_run,$size_after_run_mb" >> "$SIZES_CSV"
+    echo "$engine,$test_name,$threads,$table_size,$iteration,after_prepare,$size_after_prepare,$size_after_prepare_mb" >> "$SIZES_CSV"
+    echo "$engine,$test_name,$threads,$table_size,$iteration,after_run,$size_after_run,$size_after_run_mb" >> "$SIZES_CSV"
 
     # We parse the interval reports for detail CSV
-    # Format - [ 10s ] thds: N tps: X qps: Y ... lat (ms,95%): Z
+    # Format -- [ 10s ] thds: N tps: X qps: Y ... lat (ms,95%): Z
     grep "thds:" "$output_file" | while IFS= read -r line; do
         local time_s=$(echo "$line" | sed -n 's/.*\[ *\([0-9.]*\)s \].*/\1/p')
         local int_tps=$(echo "$line" | sed -n 's/.*tps: *\([0-9.]*\).*/\1/p')
         local int_qps=$(echo "$line" | sed -n 's/.*qps: *\([0-9.]*\).*/\1/p')
         local int_lat=$(echo "$line" | sed -n 's/.*lat (ms,[0-9]*%): *\([0-9.]*\).*/\1/p')
         local int_p95="$int_lat"
-        echo "$engine,$test_name,$threads,$table_size,$time_s,$int_tps,$int_qps,$int_lat,$int_p95" >> "$DETAIL_CSV"
+        echo "$engine,$test_name,$threads,$table_size,$iteration,$time_s,$int_tps,$int_qps,$int_lat,$int_p95" >> "$DETAIL_CSV"
     done
 
     # We parse histogram for latency distribution CSV
@@ -337,7 +363,7 @@ run_sysbench_test() {
         sed -n '/Latency histogram/,/^$/p' "$output_file" | grep "|" | while IFS= read -r line; do
             local pct=$(echo "$line" | awk '{print $1}')
             local lat=$(echo "$line" | awk '{print $2}' | sed 's/ms//g')
-            echo "$engine,$test_name,$threads,$table_size,$pct,$lat" >> "$LATENCY_CSV"
+            echo "$engine,$test_name,$threads,$table_size,$iteration,$pct,$lat" >> "$LATENCY_CSV"
         done
     fi
 
@@ -487,7 +513,7 @@ num_engines=$(echo $ENGINES | wc -w)
 num_sizes=$(echo $TABLE_SIZES | wc -w)
 num_threads=$(echo $THREAD_COUNTS | wc -w)
 num_workloads=$(echo $WORKLOADS | wc -w)
-total_tests=$((num_engines * num_sizes * num_threads * num_workloads))
+total_tests=$((num_engines * num_sizes * num_threads * num_workloads * ITERATIONS))
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════════════"
@@ -508,6 +534,7 @@ echo "  Table sizes:      $TABLE_SIZES"
 echo "  Thread counts:    $THREAD_COUNTS"
 echo "  Duration:         ${TIME}s per test"
 echo "  Warmup:           ${WARMUP}s per test"
+echo "  Iterations:       $ITERATIONS per configuration"
 echo "  Report interval:  ${REPORT_INTERVAL}s"
 echo "  Engines:          $ENGINES"
 echo "  Workloads:        $WORKLOADS"
@@ -520,17 +547,19 @@ for table_size in $TABLE_SIZES; do
     for threads in $THREAD_COUNTS; do
         for engine in $ENGINES; do
             for workload in $WORKLOADS; do
-                current_test=$((current_test + 1))
-                echo ""
-                echo "▓▓▓ Test $current_test of $total_tests ▓▓▓"
+                for iteration in $(seq 1 $ITERATIONS); do
+                    current_test=$((current_test + 1))
+                    echo ""
+                    echo "▓▓▓ Test $current_test of $total_tests ▓▓▓"
 
-                # We need to ensure server is alive before each test
-                if ! check_and_restart_server; then
-                    echo "  [ERROR] Server could not be restarted, skipping remaining tests"
-                    break 4
-                fi
+                    # We need to ensure server is alive before each test
+                    if ! check_and_restart_server; then
+                        echo "  [ERROR] Server could not be restarted, skipping remaining tests"
+                        break 5
+                    fi
 
-                run_sysbench_test "$engine" "$workload" "$threads" "$table_size" || echo "  (skipping due to error)"
+                    run_sysbench_test "$engine" "$workload" "$threads" "$table_size" "$iteration" || echo "  (skipping due to error)"
+                done
             done
         done
     done
