@@ -1,1 +1,6 @@
-results
+results/
+plots/
+*.csv
+__pycache__/
+*.pyc
+.venv/
