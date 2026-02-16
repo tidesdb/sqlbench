@@ -408,6 +408,9 @@ build_server_args() {
         --plugin-dir="${PLUGIN_DIR:-${BUILD_DIR}/storage/tidesdb}"
         --plugin-maturity=experimental
         --plugin-load-add=ha_tidesdb.so
+        --plugin-load-add=provider_lz4
+        --plugin-load-add=provider_snappy
+        --plugin-load-add=provider_zstd
         --tidesdb-flush-threads="$TIDESDB_FLUSH_THREADS"
         --tidesdb-compaction-threads="$TIDESDB_COMPACT_THREADS"
         --tidesdb-block-cache-size="$TIDESDB_BLOCK_CACHE"
