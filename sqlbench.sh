@@ -69,6 +69,9 @@
 #   ---------------------------------
 #   INNODB_BUFFER_POOL      - InnoDB buffer pool size (default: 256M)
 #   INNODB_FLUSH            - InnoDB flush_log_at_trx_commit value (default: 0 for benchmarking)
+#   INNODB_COMPRESSION      - InnoDB page compression algorithm: NONE, LZ4, ZSTD, SNAPPY (default: NONE)
+#                             When set to a value other than NONE, tables are created with
+#                             PAGE_COMPRESSED=1 PAGE_COMPRESSION_ALGORITHM='<value>'
 #
 #   Available workloads
 #   ---------------------------------
@@ -147,6 +150,7 @@ TIDESDB_BLOCK_CACHE="${TIDESDB_BLOCK_CACHE:-268435456}"
 
 # InnoDB tuning defaults
 INNODB_BUFFER_POOL="${INNODB_BUFFER_POOL:-256M}"
+INNODB_COMPRESSION="${INNODB_COMPRESSION:-NONE}"
 TIDESDB_MAX_SSTABLES="${TIDESDB_MAX_SSTABLES:-256}"
 
 # Default workloads -- OLTP coverage
@@ -261,6 +265,8 @@ run_sysbench_test() {
         if [ "${TIDESDB_USE_BTREE:-0}" = "1" ]; then
             create_opts="${create_opts} USE_BTREE=1"
         fi
+    elif [ "$engine" = "InnoDB" ] && [ "${INNODB_COMPRESSION^^}" != "NONE" ]; then
+        create_opts="PAGE_COMPRESSED=1 PAGE_COMPRESSION_ALGORITHM='${INNODB_COMPRESSION}'"
     fi
 
     # Prepare -- we pass engine options in CREATE TABLE via --create_table_options
