@@ -426,6 +426,15 @@ build_server_args() {
         --skip-networking
         --user="$(whoami)"
     )
+
+    # Production durability: enable binlog with sync when flush=1
+    if [ "${INNODB_FLUSH:-0}" = "1" ]; then
+        SERVER_ARGS+=(
+            --log-bin="${DATA_DIR}/mysql-bin"
+            --sync-binlog=1
+            --binlog-format=ROW
+        )
+    fi
 }
 
 # We start mariadbd in the background and wait for it to accept connections.
@@ -530,7 +539,15 @@ if [ -n "$DATA_DIR" ]; then
         UNION ALL
         SELECT 'innodb_buffer_pool_size', @@innodb_buffer_pool_size
         UNION ALL
-        SELECT 'innodb_file_per_table', @@innodb_file_per_table;" 2>/dev/null || true
+        SELECT 'innodb_file_per_table', @@innodb_file_per_table
+        UNION ALL
+        SELECT 'innodb_doublewrite', @@innodb_doublewrite
+        UNION ALL
+        SELECT 'innodb_flush_method', @@innodb_flush_method
+        UNION ALL
+        SELECT 'sync_binlog', @@sync_binlog
+        UNION ALL
+        SELECT 'log_bin', @@log_bin;" 2>/dev/null || true
 fi
 
 # We ensure test database exists (even if server was already running)
