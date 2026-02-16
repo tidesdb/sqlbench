@@ -228,13 +228,16 @@ run_sysbench_test() {
         --tables="$TABLES" \
         cleanup > /dev/null 2>&1 || true
 
-    # For TidesDB -- We wipe the data directory between iterations so that
-    # size measurements are per-run, not cumulative.  Requires a
-    # server restart since TidesDB holds the DB open.
+    # Wipe engine data directories between iterations so that size
+    # measurements are per-run, not cumulative.  Both engines get a clean
+    # slate -- TidesDB data dir is wiped entirely, and for InnoDB we let
+    # sysbench cleanup (DROP TABLE) handle .ibd files above, but we note
+    # that system tablespace/redo logs persist (unavoidable without a
+    # full reinit).
     if [ "$engine" = "TidesDB" ] && [ -n "$DATA_DIR" ] && [ -d "$TIDESDB_DIR" ]; then
         local tdb_size_before_wipe
         tdb_size_before_wipe=$(du -sb "$TIDESDB_DIR" 2>/dev/null | awk '{print $1}')
-        if [ "${tdb_size_before_wipe:-0}" -gt 1048576 ]; then
+        if [ "${tdb_size_before_wipe:-0}" -gt 0 ]; then
             echo "  [CLEANUP] Wiping TidesDB data dir ($(echo "scale=1; ${tdb_size_before_wipe}/1048576" | bc) MB stale data)..."
             stop_server
             rm -rf "$TIDESDB_DIR"
@@ -600,5 +603,14 @@ echo "To analyze results:"
 echo "  Compare engines by workload"
 echo "  cat $SUMMARY_CSV | column -t -s','"
 echo ""
+
+# Stop the server we started and optionally clean up data directories
+if [ "$SERVER_STARTED" = "1" ]; then
+    echo "Stopping benchmark server..."
+    stop_server
+    echo "Cleaning up data directories..."
+    rm -rf "$DATA_DIR" "$TIDESDB_DIR"
+    echo "Cleanup complete."
+fi
 
 exit 0
