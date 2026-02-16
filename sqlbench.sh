@@ -476,7 +476,7 @@ if [ -n "$DATA_DIR" ]; then
 
     PID_FILE="${DATA_DIR}/mysqld.pid"
     ERROR_LOG="${DATA_DIR}/mysqld.err"
-    MYSQLD="${BUILD_DIR}/sql/mariadbd"
+    MYSQLD="${MYSQLD:-${BUILD_DIR}/sql/mariadbd}"
 
     stop_server
 
