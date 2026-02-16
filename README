@@ -9,7 +9,7 @@ nohup env \
   PLUGIN_DIR=/usr/local/mariadb/lib/plugin \
   DATA_DIR=/data/db-bench \
   TABLE_SIZES="1000000" \
-  TABLES=1 \
+  TABLES=4 \
   THREAD_COUNTS="1 8 16" \
   TIME=300 \
   WARMUP=60 \
