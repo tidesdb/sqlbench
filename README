@@ -3,20 +3,24 @@ Example
 ================================
 
 nohup env \
-  BUILD_DIR=/root/mariadb-server/build \
+  BUILD_DIR=/usr/local/mariadb \
+  MYSQL_BIN=/usr/local/mariadb/bin/mariadb \
+  MYSQLD=/usr/local/mariadb/bin/mariadbd \
+  PLUGIN_DIR=/usr/local/mariadb/lib/plugin \
   DATA_DIR=/data/db-bench \
-  TABLE_SIZES="25000000" \
-  TABLES=4 \
-  THREAD_COUNTS="1 4 8 16" \
-  TIME=180 \
+  TABLE_SIZES="1000000" \
+  TABLES=1 \
+  THREAD_COUNTS="1 8 16" \
+  TIME=300 \
   WARMUP=60 \
-  ENGINES="InnoDB TidesDB" \
+  ENGINES="TidesDB InnoDB" \
   WORKLOADS="oltp_read_write oltp_point_select oltp_insert oltp_write_only" \
   TIDESDB_SYNC_MODE=0 \
-  ITERATIONS=1 \
+  ITERATIONS=2 \
   TIDESDB_COMPRESSION=LZ4 \
-  TIDESDB_BLOCK_CACHE=6442450944 \
-  INNODB_BUFFER_POOL=6G \
+  INNODB_COMPRESSION=LZ4 \
+  TIDESDB_BLOCK_CACHE=536870912 \
+  INNODB_BUFFER_POOL=512M \
   INNODB_FLUSH=0 \
   ./sqlbench.sh > sqlbench.log 2>&1 &
 
