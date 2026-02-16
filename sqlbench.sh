@@ -70,8 +70,8 @@
 #   INNODB_BUFFER_POOL      - InnoDB buffer pool size (default: 256M)
 #   INNODB_FLUSH            - InnoDB flush_log_at_trx_commit value (default: 0 for benchmarking)
 #   INNODB_COMPRESSION      - InnoDB page compression algorithm: NONE, LZ4, ZSTD, SNAPPY (default: NONE)
-#                             When set to a value other than NONE, tables are created with
-#                             PAGE_COMPRESSED=1 PAGE_COMPRESSION_ALGORITHM='<value>'
+#                             Sets innodb_compression_algorithm server-wide and creates
+#                             tables with PAGE_COMPRESSED=1
 #
 #   Available workloads
 #   ---------------------------------
@@ -269,7 +269,7 @@ run_sysbench_test() {
             create_opts="${create_opts} USE_BTREE=1"
         fi
     elif [ "$engine" = "InnoDB" ] && [ "${INNODB_COMPRESSION^^}" != "NONE" ]; then
-        create_opts="PAGE_COMPRESSED=1 PAGE_COMPRESSION_ALGORITHM='${INNODB_COMPRESSION}'"
+        create_opts="PAGE_COMPRESSED=1"
     fi
 
     # Prepare -- we pass engine options in CREATE TABLE via --create_table_options
@@ -417,6 +417,7 @@ build_server_args() {
         --innodb-log-group-home-dir="$INNODB_DIR"
         --innodb-buffer-pool-size="$INNODB_BUFFER_POOL"
         --innodb-log-file-size=64M
+        --innodb-compression-algorithm="${INNODB_COMPRESSION,,}"
         --innodb-flush-log-at-trx-commit="${INNODB_FLUSH:-0}"
         --skip-grant-tables
         --skip-networking
