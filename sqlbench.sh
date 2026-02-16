@@ -396,7 +396,7 @@ build_server_args() {
         --socket="$SOCKET"
         --pid-file="$PID_FILE"
         --log-error="$ERROR_LOG"
-        --plugin-dir="${BUILD_DIR}/storage/tidesdb"
+        --plugin-dir="${PLUGIN_DIR:-${BUILD_DIR}/storage/tidesdb}"
         --plugin-maturity=experimental
         --plugin-load-add=ha_tidesdb.so
         --tidesdb-flush-threads="$TIDESDB_FLUSH_THREADS"
