@@ -520,6 +520,17 @@ if [ -n "$DATA_DIR" ]; then
 
     echo "Creating test database..."
     "$MYSQL_BIN" -S "$SOCKET" -u "$DB_USER" -e "CREATE DATABASE IF NOT EXISTS $DB" 2>/dev/null || true
+
+    # Verify critical server settings are what we requested
+    echo "Verifying server settings..."
+    "$MYSQL_BIN" -S "$SOCKET" -u "$DB_USER" -e "
+        SELECT 'innodb_flush_log_at_trx_commit' AS variable, @@innodb_flush_log_at_trx_commit AS value
+        UNION ALL
+        SELECT 'innodb_compression_algorithm', @@innodb_compression_algorithm
+        UNION ALL
+        SELECT 'innodb_buffer_pool_size', @@innodb_buffer_pool_size
+        UNION ALL
+        SELECT 'innodb_file_per_table', @@innodb_file_per_table;" 2>/dev/null || true
 fi
 
 # We ensure test database exists (even if server was already running)
@@ -546,6 +557,7 @@ if [ -n "$DATA_DIR" ]; then
     echo "  TidesDB I/O dir:  ${TIDESDB_DIR}"
     echo "  TidesDB table:    SYNC_MODE=${TIDESDB_SYNC_MODE:-0} USE_BTREE=${TIDESDB_USE_BTREE:-0} COMPRESSION=${TIDESDB_COMPRESSION}"
     echo "  TidesDB global:   flush_threads=${TIDESDB_FLUSH_THREADS} compaction_threads=${TIDESDB_COMPACT_THREADS} block_cache=${TIDESDB_BLOCK_CACHE} max_sstables=${TIDESDB_MAX_SSTABLES}"
+    echo "  InnoDB tuning:    buffer_pool=${INNODB_BUFFER_POOL} flush_log_at_trx_commit=${INNODB_FLUSH:-0} compression=${INNODB_COMPRESSION}"
 fi
 echo "  Tables:           $TABLES"
 echo "  Table sizes:      $TABLE_SIZES"
