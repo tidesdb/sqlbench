@@ -187,6 +187,96 @@ def plot_summary_data_size(df, outdir):
         _save(fig, outdir, f"summary_datasize_{wl}")
 
 
+def plot_disk_usage_bar(df, outdir):
+    """Grouped bar chart of disk usage (after run) per workload: x=threads, hue=engine."""
+    workloads = sorted(df["workload"].unique())
+    for wl in workloads:
+        sub = _thread_label(df[df["workload"] == wl])
+        engines = [e for e in ENGINE_ORDER if e in sub["engine"].unique()]
+        fig, ax = plt.subplots(figsize=(8, 5))
+        sns.barplot(
+            data=sub, x="threads", y="data_size_after_run_mb", hue="engine",
+            hue_order=engines, palette=_palette(engines),
+            edgecolor="white", ax=ax,
+        )
+        ax.set_title(f"{_fmt_title(wl)} - Disk Usage After Run")
+        ax.set_xlabel("Threads")
+        ax.set_ylabel("Data Size (MB)")
+        ax.legend(title="Engine")
+        _save(fig, outdir, f"summary_disk_usage_bar_{wl}")
+
+
+def plot_disk_growth_line(df, outdir):
+    """Line chart showing disk growth (run - prepare) across threads per workload."""
+    df = df.copy()
+    df["disk_growth_mb"] = df["data_size_after_run_mb"] - df["data_size_after_prepare_mb"]
+    workloads = sorted(df["workload"].unique())
+    for wl in workloads:
+        sub = _thread_label(df[df["workload"] == wl])
+        engines = [e for e in ENGINE_ORDER if e in sub["engine"].unique()]
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for eng in engines:
+            d = sub[sub["engine"] == eng].sort_values("threads")
+            ax.plot(
+                d["threads"], d["disk_growth_mb"],
+                color=ENGINE_COLORS.get(eng, "#ccc"),
+                marker="o", linewidth=2, markersize=8,
+                label=eng, alpha=0.85,
+            )
+        ax.set_title(f"{_fmt_title(wl)} - Disk Growth (Run − Prepare)")
+        ax.set_xlabel("Threads")
+        ax.set_ylabel("Growth (MB)")
+        ax.legend(title="Engine")
+        ax.grid(True, alpha=0.3)
+        _save(fig, outdir, f"summary_disk_growth_line_{wl}")
+
+
+def plot_disk_stacked_bar(df, outdir):
+    """Stacked bar chart showing base size (after prepare) + growth per engine and thread count."""
+    import numpy as np
+    workloads = sorted(df["workload"].unique())
+    for wl in workloads:
+        sub = _thread_label(df[df["workload"] == wl])
+        engines = [e for e in ENGINE_ORDER if e in sub["engine"].unique()]
+        thread_vals = sorted(sub["threads"].unique())
+        fig, ax = plt.subplots(figsize=(8, 5))
+        n_groups = len(thread_vals)
+        n_engines = len(engines)
+        bar_width = 0.35
+        x = np.arange(n_groups)
+        for i, eng in enumerate(engines):
+            base_vals = []
+            growth_vals = []
+            for thr in thread_vals:
+                row = sub[(sub["engine"] == eng) & (sub["threads"] == thr)]
+                if row.empty:
+                    base_vals.append(0)
+                    growth_vals.append(0)
+                else:
+                    prep = row["data_size_after_prepare_mb"].values[0]
+                    run = row["data_size_after_run_mb"].values[0]
+                    base_vals.append(prep)
+                    growth_vals.append(max(run - prep, 0))
+            offset = x + (i - (n_engines - 1) / 2) * bar_width
+            ax.bar(
+                offset, base_vals, bar_width,
+                color=ENGINE_COLORS.get(eng, "#ccc"), edgecolor="white",
+                label=f"{eng} (base)",
+            )
+            ax.bar(
+                offset, growth_vals, bar_width, bottom=base_vals,
+                color=ENGINE_COLORS.get(eng, "#ccc"), edgecolor="white",
+                alpha=0.5, label=f"{eng} (growth)",
+            )
+        ax.set_xticks(x)
+        ax.set_xticklabels([str(t) for t in thread_vals])
+        ax.set_xlabel("Threads")
+        ax.set_ylabel("Data Size (MB)")
+        ax.set_title(f"{_fmt_title(wl)} - Disk Usage (Base + Growth)")
+        ax.legend(fontsize=8)
+        _save(fig, outdir, f"summary_disk_stacked_{wl}")
+
+
 def generate_summary_plots(csv_path, outdir):
     print(f"\n=== Summary plots from {csv_path} ===")
     df = pd.read_csv(csv_path)
@@ -210,6 +300,9 @@ def generate_summary_plots(csv_path, outdir):
 
     plot_summary_latency_breakdown(df, outdir)
     plot_summary_data_size(df, outdir)
+    plot_disk_usage_bar(df, outdir)
+    plot_disk_growth_line(df, outdir)
+    plot_disk_stacked_bar(df, outdir)
 
 
 # ---------------------------------------------------------------------------
