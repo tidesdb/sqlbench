@@ -2,7 +2,7 @@
 Example
 ================================
 
-TideSQL install.sh to a specific location(e.g /data being NVMe disk)
+TideSQL install.sh to a specific location(e.g /data being NVMe disk):
 ./install.sh --mariadb-prefix /data/mariadb --tidesdb-prefix /data/tidesdb --build-dir /data/tidesql-build
 
 You need latest sysbench and libmysqlclient21:
